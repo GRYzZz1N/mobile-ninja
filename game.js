@@ -89,10 +89,11 @@ for (const c of ['blue', 'red']) {
 }
 const imgReady = (im) => im && im.complete && im.naturalWidth > 0;
 
-// индекс направления 0..7 по сглаженному углу взгляда (0° листа = взгляд вниз)
+// индекс направления 0..7 по сглаженному углу взгляда
+// (0° листа = взгляд вниз, 90° листа = взгляд вправо)
 function dirIndex(dispAngle) {
   const deg = dispAngle * 180 / Math.PI;
-  const theta = ((deg - 90) % 360 + 360) % 360;
+  const theta = ((90 - deg) % 360 + 360) % 360;
   return Math.round(theta / 45) % 8;
 }
 
