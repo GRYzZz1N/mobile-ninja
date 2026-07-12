@@ -565,11 +565,15 @@ function burst(x, y, color, n, speed) {
 
 // ---------- Сеть: игра с другом через комнаты ----------
 // Хост считает всю игру; гость шлёт свой ввод и рисует присланное состояние.
-// адрес сервера комнат можно переопределить параметром ?ws=host (для туннелей/хостинга)
+// Сервер комнат: локально — тот же хост :8001; в облаке (GitHub Pages) — Render.
+// Переопределяется параметром ?ws=host (для туннелей и отладки).
+const CLOUD_ROOMS = 'wss://mobile-ninja-rooms.onrender.com';
 const wsParam = new URLSearchParams(location.search).get('ws');
 const WS_URL = wsParam
   ? (wsParam.includes('://') ? wsParam : 'wss://' + wsParam)
-  : (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.hostname + ':8001';
+  : (location.hostname.endsWith('github.io')
+      ? CLOUD_ROOMS
+      : (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.hostname + ':8001');
 let ws = null;
 let netRole = null;      // null (с ботом) | 'host' | 'guest'
 let roomCode = '';

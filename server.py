@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """Mobile Ninja — сервер: раздаёт файлы игры (HTTP :8000) и сводит игроков
 в комнаты по коду (WebSocket :8001). Внутри комнаты просто пересылает
-сообщения между хостом и гостем — всю игру считает хост."""
+сообщения между хостом и гостем — всю игру считает хост.
+
+В облаке (Render и т.п.) задан env PORT: тогда поднимается только сервер
+комнат на этом порту, а файлы игры раздаёт GitHub Pages."""
 import asyncio
 import functools
 import http.server
@@ -13,8 +16,9 @@ import threading
 
 import websockets
 
+CLOUD_PORT = os.environ.get("PORT")  # облачный режим, только комнаты
 HTTP_PORT = 8000
-WS_PORT = 8001
+WS_PORT = int(CLOUD_PORT) if CLOUD_PORT else 8001
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # без похожих букв/цифр
 
 rooms = {}  # код -> {"host": ws, "guest": ws | None}
@@ -95,10 +99,18 @@ def run_http():
         httpd.serve_forever()
 
 
+def health_check(connection, request):
+    """Обычный HTTP-запрос (health check хостинга) — отвечаем 200, не ломая WS."""
+    if "Upgrade" not in request.headers:
+        return connection.respond(200, "Mobile Ninja rooms server OK\n")
+    return None
+
+
 async def main():
-    threading.Thread(target=run_http, daemon=True).start()
-    async with websockets.serve(handler, "0.0.0.0", WS_PORT):
+    if not CLOUD_PORT:
+        threading.Thread(target=run_http, daemon=True).start()
         print(f"HTTP  : http://0.0.0.0:{HTTP_PORT}")
+    async with websockets.serve(handler, "0.0.0.0", WS_PORT, process_request=health_check):
         print(f"WS    : ws://0.0.0.0:{WS_PORT}")
         print("Сервер Mobile Ninja запущен. Не закрывайте окно.")
         await asyncio.Future()
