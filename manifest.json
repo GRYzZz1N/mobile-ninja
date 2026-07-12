@@ -1,0 +1,13 @@
+{
+  "name": "Mobile Ninja",
+  "short_name": "MobileNinja",
+  "description": "Хардкорные дуэли ниндзя 1 на 1",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#0b0f14",
+  "theme_color": "#0b0f14",
+  "start_url": "./",
+  "icons": [
+    { "src": "assets/icon_dagger.png", "sizes": "256x256", "type": "image/png" }
+  ]
+}
