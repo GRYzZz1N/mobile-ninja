@@ -68,6 +68,24 @@ function applyMode(mode) {
   resize();
 }
 
+// ---------- Telegram Mini App ----------
+const TG = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.platform !== 'unknown')
+  ? window.Telegram.WebApp : null;
+const TG_APP_LINK = 'https://t.me/mobileninjjabot/mobileninja';
+if (TG) {
+  try {
+    TG.ready();
+    TG.expand();
+    if (TG.requestFullscreen) { try { TG.requestFullscreen(); } catch (e) {} }
+    if (TG.disableVerticalSwipes) { try { TG.disableVerticalSwipes(); } catch (e) {} }
+    if (TG.onEvent) {
+      TG.onEvent('viewportChanged', () => resize());
+      TG.onEvent('fullscreenChanged', () => resize());
+      TG.onEvent('safeAreaChanged', () => resize());
+    }
+  } catch (e) {}
+}
+
 // ---------- Спрайты (assets/, вырезаны из спрайт-листа) ----------
 const IMG = {};
 for (const name of ['ninja_blue', 'ninja_red', 'fx_shuriken', 'crate', 'box', 'floor',
@@ -338,6 +356,11 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 // На телефоне: полный экран + поворот под выбранный режим (где браузер разрешает)
 function tryFullscreen() {
+  if (TG) {
+    // внутри Telegram — его собственный полноэкранный режим
+    try { TG.requestFullscreen && TG.requestFullscreen(); } catch (e) {}
+    return;
+  }
   if (!('ontouchstart' in window)) return; // только сенсорные устройства
   const el = document.documentElement;
   if (!document.fullscreenElement && el.requestFullscreen) {
@@ -394,7 +417,17 @@ canvas.addEventListener('pointerdown', e => {
     }
     return;
   }
-  if (state === 'lobby') { netReset(''); return; } // отмена ожидания
+  if (state === 'lobby') {
+    if (roomCode) {
+      const b = inviteBtnRect();
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+        shareInvite();
+        return;
+      }
+    }
+    netReset(''); // тап мимо кнопки — отмена ожидания
+    return;
+  }
   if (state === 'gameover') {
     if (netRole === 'guest') { netReset(''); }
     else { tryFullscreen(); newGame(); }
@@ -644,11 +677,33 @@ function createRoom() {
   netOpen(() => netSend({ t: 'create' }));
 }
 
+function joinRoomWithCode(code) {
+  state = 'lobby'; netMsg = 'Вход в комнату…'; roomCode = '';
+  netOpen(() => netSend({ t: 'join', code }));
+}
+
 function joinRoom() {
   const code = (window.prompt('Код комнаты (4 символа):') || '').trim().toUpperCase();
   if (!code) return;
-  state = 'lobby'; netMsg = 'Вход в комнату…'; roomCode = '';
-  netOpen(() => netSend({ t: 'join', code }));
+  joinRoomWithCode(code);
+}
+
+// Инвайт для Telegram: ссылка сразу заводит друга в комнату
+function inviteBtnRect() {
+  return { x: VW / 2 - 160, y: VH / 2 + 40, w: 320, h: 48 };
+}
+
+function shareInvite() {
+  const url = TG_APP_LINK + '?startapp=' + roomCode;
+  const text = 'Дуэль в Mobile Ninja! Открой ссылку — попадёшь сразу в мой матч.';
+  if (TG && TG.openTelegramLink) {
+    TG.openTelegramLink('https://t.me/share/url?url=' + encodeURIComponent(url) +
+                        '&text=' + encodeURIComponent(text));
+  } else if (navigator.share) {
+    navigator.share({ text: text + ' ' + url }).catch(() => {});
+  } else if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => { netMsg = 'Ссылка скопирована!'; }).catch(() => {});
+  }
 }
 
 function netHandle(m) {
@@ -1526,27 +1581,28 @@ function drawHUD() {
     ctx.restore();
   }
 
-  // Счёт
+  // Счёт (в Telegram — ниже, чтобы не попадать под его шапку в полном экране)
   ctx.save();
   ctx.textAlign = 'center';
+  const dy = TG ? 46 : 0;
   ctx.fillStyle = 'rgba(8,14,22,0.7)';
   const swW = 200, swH = 46;
-  roundRect(VW / 2 - swW / 2, 10, swW, swH, 12);
+  roundRect(VW / 2 - swW / 2, 10 + dy, swW, swH, 12);
   ctx.fill();
   const myScore = netRole === 'guest' ? score.bot : score.you;
   const foeScore = netRole === 'guest' ? score.you : score.bot;
   ctx.font = 'bold 26px sans-serif';
   ctx.fillStyle = me().color;
-  ctx.fillText(myScore, VW / 2 - 46, 42);
+  ctx.fillText(myScore, VW / 2 - 46, 42 + dy);
   ctx.fillStyle = 'rgba(230,240,255,0.85)';
   ctx.font = 'bold 16px sans-serif';
-  ctx.fillText(':', VW / 2, 40);
+  ctx.fillText(':', VW / 2, 40 + dy);
   ctx.font = 'bold 26px sans-serif';
   ctx.fillStyle = foe().color;
-  ctx.fillText(foeScore, VW / 2 + 46, 42);
+  ctx.fillText(foeScore, VW / 2 + 46, 42 + dy);
   ctx.fillStyle = 'rgba(180,195,215,0.8)';
   ctx.font = '11px sans-serif';
-  ctx.fillText('РАУНД ' + round + ' • ДО ' + WIN_SCORE, VW / 2, 68);
+  ctx.fillText('РАУНД ' + round + ' • ДО ' + WIN_SCORE, VW / 2, 68 + dy);
   ctx.restore();
 }
 
@@ -1619,13 +1675,26 @@ function drawOverlays() {
       ctx.fillStyle = '#ffd166';
       ctx.font = 'bold 64px monospace';
       ctx.fillText(roomCode, VW / 2, VH / 2 + 10);
-      ctx.fillStyle = 'rgba(200,215,235,0.9)';
-      ctx.font = '16px sans-serif';
-      ctx.fillText('Скажи код другу: «Войти по коду»', VW / 2, VH / 2 + 56);
+      // кнопка приглашения (Telegram-ссылка или системный шаринг/буфер)
+      const b = inviteBtnRect();
+      ctx.fillStyle = 'rgba(255,209,102,0.16)';
+      roundRect(b.x, b.y, b.w, b.h, 14);
+      ctx.fill();
+      ctx.strokeStyle = '#ffd166';
+      ctx.lineWidth = 2.5;
+      roundRect(b.x, b.y, b.w, b.h, 14);
+      ctx.stroke();
+      ctx.fillStyle = '#ffd166';
+      ctx.font = 'bold 19px sans-serif';
+      ctx.fillText('ПРИГЛАСИТЬ ДРУГА', VW / 2, b.y + 31);
       const blinkOn = Math.sin(tNow * 4) > -0.3;
-      if (blinkOn) {
+      ctx.font = '15px sans-serif';
+      if (netMsg) {
+        ctx.fillStyle = '#8aff6b';
+        ctx.fillText(netMsg, VW / 2, VH / 2 + 122);
+      } else if (blinkOn) {
         ctx.fillStyle = 'rgba(160,180,205,0.9)';
-        ctx.fillText('Ожидание друга…', VW / 2, VH / 2 + 92);
+        ctx.fillText('Ожидание друга… (или скажи ему код)', VW / 2, VH / 2 + 122);
       }
     } else {
       ctx.fillStyle = 'rgba(200,215,235,0.9)';
@@ -1634,7 +1703,7 @@ function drawOverlays() {
     }
     ctx.fillStyle = 'rgba(160,180,205,0.7)';
     ctx.font = '14px sans-serif';
-    ctx.fillText('Коснись экрана, чтобы отменить', VW / 2, VH / 2 + 140);
+    ctx.fillText('Коснись пустого места, чтобы отменить', VW / 2, VH / 2 + 156);
   } else if (state === 'countdown') {
     ctx.fillStyle = '#ffd166';
     ctx.font = 'bold 90px sans-serif';
@@ -1738,4 +1807,12 @@ function loop(now) {
   render();
   requestAnimationFrame(loop);
 }
+
+// Авто-вход по инвайт-ссылке Telegram: t.me/<бот>/<приложение>?startapp=КОД
+const tgStart = (TG && TG.initDataUnsafe && TG.initDataUnsafe.start_param) ||
+                new URLSearchParams(location.search).get('tgWebAppStartParam') || '';
+if (/^[A-Za-z0-9]{4}$/.test(tgStart)) {
+  joinRoomWithCode(tgStart.toUpperCase());
+}
+
 requestAnimationFrame(loop);
