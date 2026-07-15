@@ -94,7 +94,11 @@ const imgReady = (im) => im && im.complete && im.naturalWidth > 0;
 function dirIndex(dispAngle) {
   const deg = dispAngle * 180 / Math.PI;
   const theta = ((90 - deg) % 360 + 360) % 360;
-  return Math.round(theta / 45) % 8;
+  let di = Math.round(theta / 45) % 8;
+  // на листе ячейки 135° и 225° перепутаны местами — верхние диагонали меняем
+  if (di === 3) di = 5;
+  else if (di === 5) di = 3;
+  return di;
 }
 
 // ---------- Канвас и масштабирование ----------
