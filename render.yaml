@@ -3,5 +3,6 @@ services:
     name: mobile-ninja-rooms
     runtime: python
     plan: free
+    region: frankfurt
     buildCommand: pip install -r requirements.txt
     startCommand: python server.py

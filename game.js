@@ -761,7 +761,7 @@ function buildSnapshot() {
 }
 
 function applySnapshot(m) {
-  const unpack = (n, a) => {
+  const unpack = (n, a, isMine) => {
     const wasAlive = n.alive;
     const hadShield = tNow < n.shieldUntil;
     const jump = dist(n.x, n.y, a[0], a[1]);
@@ -774,7 +774,8 @@ function applySnapshot(m) {
       }
       n.x = a[0]; n.y = a[1];
     }
-    n.face = { x: a[2], y: a[3] };
+    // свой ниндзя предсказывается локально — направление взгляда не перетираем
+    if (!isMine) n.face = { x: a[2], y: a[3] };
     n.alive = !!a[4];
     n.shieldUntil = a[5] > 0 ? tNow + a[5] : 0;
     if (!hadShield && a[5] > 0.05) SND.shield();
@@ -789,8 +790,8 @@ function applySnapshot(m) {
       shake = 10;
     }
   };
-  unpack(player, m.p);
-  unpack(bot, m.b);
+  unpack(player, m.p, false);
+  unpack(bot, m.b, true); // мой ниндзя — позиция как мягкая коррекция предсказания
 
   // кулдауны моего ниндзя (bot) для кнопок
   ['shield', 'blink', 'wave', 'dagger'].forEach((k, i) => { bot.cds[k] = tNow + m.k[i]; });
@@ -840,35 +841,70 @@ function applySnapshot(m) {
          : m.ban === 2 ? (netRole === 'guest' ? 'УБИЙСТВО!' : 'ВЫ ПОГИБЛИ') : '';
 }
 
-// --- Кадр гостя: лерп к снапшоту, локальный полёт снарядов, отправка ввода ---
+// --- Кадр гостя: предсказание своего движения + лерп чужого, отправка ввода ---
 function guestUpdate(dt) {
-  for (const n of [player, bot]) {
-    if (n.tx !== undefined && n.alive) {
-      n.moving = dist(n.x, n.y, n.tx, n.ty) > 2;
-      n.x += (n.tx - n.x) * Math.min(1, dt * 15);
-      n.y += (n.ty - n.y) * Math.min(1, dt * 15);
-      if (n.moving) n.stepPhase += dt * 10;
+  const mine = bot, other = player;
+
+  // противник: плавно следуем за снапшотами хоста
+  if (other.tx !== undefined && other.alive) {
+    other.moving = dist(other.x, other.y, other.tx, other.ty) > 2;
+    other.x += (other.tx - other.x) * Math.min(1, dt * 15);
+    other.y += (other.ty - other.y) * Math.min(1, dt * 15);
+    if (other.moving) other.stepPhase += dt * 10;
+  }
+
+  // мой ввод (мир у гостя повёрнут на 180° — жесты инвертируются)
+  let jx = 0, jy = 0;
+  if (joy.active) {
+    jx = joy.dx / JOY_RADIUS; jy = joy.dy / JOY_RADIUS;
+  } else {
+    jx = (keys['arrowright'] ? 1 : 0) - (keys['arrowleft'] ? 1 : 0);
+    jy = (keys['arrowdown'] ? 1 : 0) - (keys['arrowup'] ? 1 : 0);
+  }
+  jx *= dirSign(); jy *= dirSign();
+  const jm = Math.hypot(jx, jy);
+
+  if (state === 'fight' && mine.alive) {
+    // предсказание: двигаем своего ниндзя сразу, не дожидаясь сервера
+    if (jm > 0.08) {
+      const nd = norm(jx, jy);
+      const k = clamp(jm * 1.6, 0, 1);
+      mine.vx = nd.x * MOVE_SPEED * k;
+      mine.vy = nd.y * MOVE_SPEED * k;
+      if (!aimDrag.skill) mine.face = nd;
+    } else {
+      mine.vx = 0; mine.vy = 0;
     }
+    moveNinja(mine, dt);
+    mine.moving = jm > 0.08;
+    if (mine.moving) mine.stepPhase += dt * (6 + Math.hypot(mine.vx, mine.vy) / 22);
+    // мягкая коррекция к авторитетной позиции хоста
+    if (mine.tx !== undefined) {
+      mine.x += (mine.tx - mine.x) * Math.min(1, dt * 3);
+      mine.y += (mine.ty - mine.y) * Math.min(1, dt * 3);
+    }
+  } else if (mine.tx !== undefined) {
+    // вне боя (отсчёт, конец раунда) — просто следуем за сервером
+    mine.x += (mine.tx - mine.x) * Math.min(1, dt * 15);
+    mine.y += (mine.ty - mine.y) * Math.min(1, dt * 15);
+    mine.moving = false;
+  }
+
+  // сглаживание разворота
+  for (const n of [player, bot]) {
     const targetA = Math.atan2(n.face.y, n.face.x);
     n.dispAngle += angDiff(targetA, n.dispAngle) * Math.min(1, dt * 14);
   }
+
+  // снаряды летят локально между снапшотами
   for (const pr of projectiles) {
     pr.x += pr.dx * pr.speed * dt;
     pr.y += pr.dy * pr.speed * dt;
     if (pr.type === 'dagger') pr.spin += dt * 20;
   }
-  // ввод ~20 раз/с
-  netFrame++;
-  if (netFrame % 3 === 0 && state === 'fight') {
-    let jx = 0, jy = 0;
-    if (joy.active) {
-      jx = joy.dx / JOY_RADIUS; jy = joy.dy / JOY_RADIUS;
-    } else {
-      jx = (keys['arrowright'] ? 1 : 0) - (keys['arrowleft'] ? 1 : 0);
-      jy = (keys['arrowdown'] ? 1 : 0) - (keys['arrowup'] ? 1 : 0);
-    }
-    // мир у гостя повёрнут на 180° — жесты инвертируются в мировые координаты
-    jx *= dirSign(); jy *= dirSign();
+
+  // ввод ~30 раз/с (netFrame тикает в главном цикле)
+  if (netFrame % 2 === 0 && state === 'fight') {
     netSend({ t: 'i', j: [Math.round(jx * 100) / 100, Math.round(jy * 100) / 100] });
   }
 }
@@ -1241,8 +1277,12 @@ function drawNinja(n) {
     ctx.beginPath(); ctx.ellipse(0, n.r * 0.7, n.r * 0.9, n.r * 0.4, 0, 0, Math.PI * 2); ctx.fill();
   }
 
-  // направленный кадр: стойка или цикл бега (1-2-3-2) по фазе шагов
-  const di = dirIndex(n.dispAngle);
+  // направленный кадр: стойка или цикл бега (1-2-3-2) по фазе шагов.
+  // У гостя мир повёрнут на 180°: кадр выбираем по ЭКРАННОМУ углу и рисуем
+  // с контр-поворотом, чтобы спрайт всегда был головой вверх
+  const flip = netRole === 'guest';
+  const screenAngle = flip ? n.dispAngle + Math.PI : n.dispAngle;
+  const di = dirIndex(screenAngle);
   const runF = [1, 2, 3, 2][Math.floor(n.stepPhase / 1.3) % 4];
   const kind = n.moving ? 'run' + runF : 'idle';
   const animSet = n.sprite === 'ninja_red' ? 'red' : 'blue';
@@ -1254,9 +1294,11 @@ function drawNinja(n) {
     if (n.moving) sy = 1 + Math.sin(n.stepPhase * 2) * 0.03;
     else sy = 1 + Math.sin(tNow * 2.6) * 0.015; // дыхание в покое
     const dw = 62;
+    if (flip) ctx.rotate(Math.PI);
     ctx.scale(1, sy);
     ctx.drawImage(dirIm, -dw / 2, n.r - dw * (162 / 170), dw, dw);
     ctx.scale(1, 1 / sy);
+    if (flip) ctx.rotate(-Math.PI);
   } else if (imgReady(im)) {
     // запасной вариант: одиночный спрайт с программным поворотом
     const a = n.dispAngle - Math.PI / 2;
